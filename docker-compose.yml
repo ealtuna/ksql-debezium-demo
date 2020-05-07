@@ -1,0 +1,159 @@
+---
+version: '2'
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:5.5.0
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-enterprise-kafka:5.5.0
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    links:
+      - zookeeper
+    ports:
+      - 9092:9092
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 100
+    command:
+      - bash
+      - -c 
+      - |
+        echo '127.0.0.1 kafka' >> /etc/hosts
+        /etc/confluent/docker/run
+        sleep infinity  
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:5.5.0
+    container_name: schema-registry
+    depends_on:
+      - zookeeper
+      - kafka
+    links:
+      - zookeeper
+      - kafka
+    ports:
+      - 8081:8081
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_CONNECTION_URL: zookeeper:2181
+
+  kafka-connect-01:
+    image: confluentinc/cp-kafka-connect:5.5.0
+    container_name: kafka-connect-01
+    depends_on:
+      - kafka
+      - schema-registry
+    links:
+      - schema-registry
+      - kafka
+      - mysql
+    ports:
+      - 8083:8083
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: "kafka:29092"
+      CONNECT_REST_ADVERTISED_HOST_NAME: "kafka-connect-01"
+      CONNECT_REST_PORT: 8083
+      CONNECT_GROUP_ID: kafka-connect-01
+      CONNECT_CONFIG_STORAGE_TOPIC: _kafka-connect-01-configs
+      CONNECT_OFFSET_STORAGE_TOPIC: _kafka-connect-01-offsets
+      CONNECT_STATUS_STORAGE_TOPIC: _kafka-connect-01-status
+      CONNECT_KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: 'http://schema-registry:8081'
+      CONNECT_VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: 'http://schema-registry:8081'
+      CONNECT_INTERNAL_KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_INTERNAL_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_LOG4J_ROOT_LOGLEVEL: "INFO"
+      CONNECT_LOG4J_LOGGERS: "org.apache.kafka.connect.runtime.rest=WARN,org.reflections=ERROR"
+      CONNECT_LOG4J_APPENDER_STDOUT_LAYOUT_CONVERSIONPATTERN: "[%d] %p %X{connector.context}%m (%c:%L)%n"
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_PLUGIN_PATH: '/usr/share/java,/usr/share/confluent-hub-components/,/connectors/'
+    volumes:
+      - $PWD/connectors:/connectors
+    command: 
+      - bash 
+      - -c 
+      - |
+        # Nasty hack for ECS
+        echo '127.0.0.1 kafka-connect-01' >> /etc/hosts
+        #
+        echo "Installing connector plugins"
+        confluent-hub install --no-prompt debezium/debezium-connector-mysql:1.1.0
+        #
+        echo "Launching Kafka Connect worker"
+        /etc/confluent/docker/run & 
+
+        sleep infinity
+
+  ksqldb:
+    image: confluentinc/ksqldb-server:0.8.1
+    hostname: ksqldb
+    container_name: ksqldb
+    links:
+      - schema-registry
+      - kafka-connect-01
+      - kafka
+    depends_on:
+      - kafka
+      - kafka-connect-01
+    ports:
+      - "8088:8088"
+    environment:
+      KSQL_LISTENERS: http://0.0.0.0:8088
+      KSQL_BOOTSTRAP_SERVERS: kafka:29092
+      KSQL_KSQL_LOGGING_PROCESSING_STREAM_AUTO_CREATE: "true"
+      KSQL_KSQL_LOGGING_PROCESSING_TOPIC_AUTO_CREATE: "true"
+      KSQL_KSQL_CONNECT_URL: http://kafka-connect-01:8083
+      KSQL_KSQL_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      KSQL_KSQL_SERVICE_ID: confluent_rmoff_01
+      KSQL_KSQL_HIDDEN_TOPICS: '^_.*'
+
+  mysql:
+    image: debezium/example-mysql:1.1
+    container_name: mysql
+    ports:
+        - 3306:3306
+    environment:
+        - MYSQL_ROOT_PASSWORD=debezium
+        - MYSQL_USER=mysqluser
+        - MYSQL_PASSWORD=mysqlpwh
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.5.0
+    container_name: elasticsearch
+    ports:
+      - 9200:9200
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+      memlock:
+        soft: -1
+        hard: -1        
+    environment:
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "-Xms1g -Xmx1g"
+      discovery.type: "single-node"
+      node.store.allow_mmap: "false"
+    command: 
+      - bash 
+      - -c 
+      - |
+        /usr/local/bin/docker-entrypoint.sh & 
+        sleep infinity
