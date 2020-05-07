@@ -63,14 +63,15 @@ SET 'auto.offset.reset' = 'earliest';
 CREATE TABLE customers WITH (KAFKA_TOPIC='dbserver.inventory.customers', VALUE_FORMAT='AVRO');
 
 CREATE STREAM orders_stream WITH (KAFKA_TOPIC='dbserver.inventory.orders',VALUE_FORMAT='AVRO');
+CREATE STREAM orders_stream_partitioned AS SELECT * FROM orders_stream PARTITION BY purchaser;
 
 CREATE STREAM ORDERS_WITH_CUSTOMER
        WITH (KAFKA_TOPIC='orders_with_customer')
        AS
-SELECT o.ORDER_NUMBER as ORDER_NUMBER, o.product_id, o.quantity,
+SELECT o.ORDER_NUMBER as order_number, o.product_id, o.quantity,
        c.id AS customer_id, c.first_name + ' ' + c.last_name AS full_name
-FROM orders_stream o LEFT JOIN customers c ON CAST(o.purchaser AS STRING) = c.ROWKEY
-PARTITION BY ORDER_NUMBER
+FROM orders_stream_partitioned o LEFT JOIN customers c ON CAST(o.purchaser AS STRING) = c.ROWKEY
+PARTITION BY order_number
 EMIT CHANGES;
 ```
 
@@ -120,3 +121,8 @@ curl -X GET \
 Trigger a change in the database:
 
     UPDATE orders SET quantity=20  WHERE order_number=10001;
+
+## Clean up
+
+    docker-compose down
+
