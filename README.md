@@ -21,35 +21,12 @@ CREATE SOURCE CONNECTOR SOURCE_CUSTOMER WITH (
     'database.password' = 'dbz',
     'database.server.id' = '101',
     'database.server.name' = 'dbserver',
-    'table.whitelist' = 'inventory.customers',
+    'table.whitelist' = 'inventory.customers,inventory.orders',
     'database.history.kafka.bootstrap.servers' = 'kafka:29092',
     'database.history.kafka.topic' = 'dbhistory.demo' ,
     'include.schema.changes' = 'false',
-    'transforms'= 'unwrap,extractkey',
+    'transforms'= 'unwrap',
     'transforms.unwrap.type'= 'io.debezium.transforms.ExtractNewRecordState',
-    'transforms.extractkey.type'= 'org.apache.kafka.connect.transforms.ExtractField$Key',
-    'transforms.extractkey.field'= 'id',
-    'key.converter'= 'org.apache.kafka.connect.storage.StringConverter',
-    'value.converter'= 'io.confluent.connect.avro.AvroConverter',
-    'value.converter.schema.registry.url'= 'http://schema-registry:8081'
-    );
-
-CREATE SOURCE CONNECTOR SOURCE_ORDER WITH (
-    'connector.class' = 'io.debezium.connector.mysql.MySqlConnector',
-    'database.hostname' = 'mysql',
-    'database.port' = '3306',
-    'database.user' = 'debezium',
-    'database.password' = 'dbz',
-    'database.server.id' = '102',
-    'database.server.name' = 'dbserver',
-    'table.whitelist' = 'inventory.orders',
-    'database.history.kafka.bootstrap.servers' = 'kafka:29092',
-    'database.history.kafka.topic' = 'dbhistory.demo' ,
-    'include.schema.changes' = 'false',
-    'transforms'= 'unwrap,extractkey',
-    'transforms.unwrap.type'= 'io.debezium.transforms.ExtractNewRecordState',
-    'transforms.extractkey.type'= 'org.apache.kafka.connect.transforms.ExtractField$Key',
-    'transforms.extractkey.field'= 'order_number',
     'key.converter'= 'org.apache.kafka.connect.storage.StringConverter',
     'value.converter'= 'io.confluent.connect.avro.AvroConverter',
     'value.converter.schema.registry.url'= 'http://schema-registry:8081'
@@ -60,17 +37,20 @@ CREATE SOURCE CONNECTOR SOURCE_ORDER WITH (
 
 ```
 SET 'auto.offset.reset' = 'earliest';
-CREATE TABLE customers WITH (KAFKA_TOPIC='dbserver.inventory.customers', VALUE_FORMAT='AVRO');
+CREATE STREAM customers_debezium WITH (KAFKA_TOPIC='dbserver.inventory.customers',VALUE_FORMAT='AVRO');
+CREATE STREAM customers_stream WITH(KAFKA_TOPIC='customers_by_userId') AS 
+SELECT CAST(id AS INTEGER) AS id, first_name, last_name FROM customers_debezium PARTITION BY id EMIT CHANGES;
+CREATE TABLE customers (ROWKEY INT PRIMARY KEY, first_name VARCHAR, last_name VARCHAR) WITH (KAFKA_TOPIC='customers_by_userId', VALUE_FORMAT='AVRO');
 
-CREATE STREAM orders_stream WITH (KAFKA_TOPIC='dbserver.inventory.orders',VALUE_FORMAT='AVRO');
-CREATE STREAM orders_stream_partitioned AS SELECT * FROM orders_stream PARTITION BY purchaser;
+CREATE STREAM orders_debezium WITH (KAFKA_TOPIC='dbserver.inventory.orders',VALUE_FORMAT='AVRO');
+CREATE STREAM orders_stream AS SELECT * FROM orders_debezium PARTITION BY purchaser;
 
 CREATE STREAM ORDERS_WITH_CUSTOMER
        WITH (KAFKA_TOPIC='orders_with_customer')
        AS
 SELECT o.ORDER_NUMBER as order_number, o.product_id, o.quantity,
-       c.id AS customer_id, c.first_name + ' ' + c.last_name AS full_name
-FROM orders_stream_partitioned o LEFT JOIN customers c ON CAST(o.purchaser AS STRING) = c.ROWKEY
+       c.ROWKEY AS customer_id, c.first_name + ' ' + c.last_name AS full_name
+FROM orders_stream o LEFT JOIN customers c ON o.purchaser = c.ROWKEY
 PARTITION BY order_number
 EMIT CHANGES;
 ```
