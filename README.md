@@ -90,12 +90,7 @@ Query ElasticSearch:
 ```
 curl -X GET \
   http://localhost:9200/orders_with_customer/_search \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "query": {
-        "match_all": {}
-    }
-}'
+  -H 'Content-Type: application/json'
 ```
 
 Trigger a change in the database:
